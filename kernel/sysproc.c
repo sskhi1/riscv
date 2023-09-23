@@ -1,3 +1,4 @@
+#include "sysinfo.h"
 #include "types.h"
 #include "riscv.h"
 #include "defs.h"
@@ -101,5 +102,17 @@ sys_trace(void)
   
   argint(0, &mask);
   myproc()->mask = mask;
+  return 0;
+}
+
+uint64
+sys_sysinfo(void)
+{
+  uint64 addr = 0;
+  argaddr(0, &addr);
+  struct sysinfo s_info = {collect_free_memory(), get_processes_num()};
+
+  if(copyout(myproc()->pagetable, addr, (char *)&s_info, sizeof(s_info)) < 0)
+      return -1;
   return 0;
 }

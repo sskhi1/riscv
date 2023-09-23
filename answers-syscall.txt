@@ -1,0 +1,5 @@
+1.usertrap
+2.7. it represents SYS-exec
+3.user mode
+5.load page fault
+6.initcode. pid=1

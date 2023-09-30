@@ -1,0 +1,5 @@
+Which other xv6 system call(s) could be made faster using this shared page?
+
+system calls which are for data retrieval or which use copyout.
+getpid() for example.
+its because data can be read in usermode now.

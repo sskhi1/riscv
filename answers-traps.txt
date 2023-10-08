@@ -1,0 +1,21 @@
+1. arguments of functions registers - a0-a7
+    13 is loaded in a2
+
+2. there is no call of f and g in main. The compiler inline functions.
+
+3. 
+  printf("%d %d\n", f(8)+1, 13);
+  28:	00000517          	auipc	a0,0x0
+  2c:	7b850513          	addi	a0,a0,1976 # 7e0 <malloc+0xe6>
+  30:	00000097          	auipc	ra,0x0
+  34:	612080e7          	jalr	1554(ra) # 642 <printf>
+
+  the address of printf is base address plus 1976
+
+4. 0x34
+
+5. He110 World
+   i value can be ('d' << 16) | ('l' << 8) | 'r'
+   for big endian i = 0x726c64 and you need not change 57616.
+
+6. x=3 y=0 - y value is not specific, it depends on value of the x's next register

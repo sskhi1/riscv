@@ -49,7 +49,7 @@ sys_sbrk(void)
   }
   else
   {
-    return -1;
+    myproc()->sz = uvmdealloc(myproc()->pagetable, myproc()->sz, myproc()->sz + n);
   }
   return addr;
 }

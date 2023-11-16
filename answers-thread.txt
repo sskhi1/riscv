@@ -1,0 +1,2 @@
+multiple threads simultaneously attempt to modify the same data without proper synchronization, which does not happen
+in case of one thread.

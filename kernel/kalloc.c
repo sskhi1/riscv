@@ -12,7 +12,6 @@
 void freerange(void *pa_start, void *pa_end);
 
 extern char end[]; // first address after kernel.
-char tmp[10];
 // defined by kernel.ld.
 
 struct run {
@@ -26,6 +25,7 @@ struct {
 
 void
 kinit() {
+    char tmp[10];
     for (int i = 0; i < NCPU; i++) {
         snprintf(tmp, 10, "kmem_CPU%d", i);
         initlock(&kmem[i].lock, tmp);

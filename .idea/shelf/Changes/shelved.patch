@@ -1,0 +1,287 @@
+Index: kernel/bio.c
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>// Buffer cache.\r\n//\r\n// The buffer cache is a linked list of buf structures holding\r\n// cached copies of disk block contents.  Caching disk blocks\r\n// in memory reduces the number of disk reads and also provides\r\n// a synchronization point for disk blocks used by multiple processes.\r\n//\r\n// Interface:\r\n// * To get a buffer for a particular disk block, call bread.\r\n// * After changing buffer data, call bwrite to write it to disk.\r\n// * When done with the buffer, call brelse.\r\n// * Do not use the buffer after calling brelse.\r\n// * Only one process at a time can use a buffer,\r\n//     so do not keep them longer than necessary.\r\n\r\n\r\n#include \"types.h\"\r\n#include \"param.h\"\r\n#include \"spinlock.h\"\r\n#include \"sleeplock.h\"\r\n#include \"riscv.h\"\r\n#include \"defs.h\"\r\n#include \"fs.h\"\r\n#include \"buf.h\"\r\n\r\nstruct {\r\n  struct spinlock lock;\r\n  struct buf buf[NBUF];\r\n\r\n  // Linked list of all buffers, through prev/next.\r\n  // Sorted by how recently the buffer was used.\r\n  // head.next is most recent, head.prev is least.\r\n  struct buf head;\r\n} bcache;\r\n\r\nvoid\r\nbinit(void)\r\n{\r\n  struct buf *b;\r\n\r\n  initlock(&bcache.lock, \"bcache\");\r\n\r\n  // Create linked list of buffers\r\n  bcache.head.prev = &bcache.head;\r\n  bcache.head.next = &bcache.head;\r\n  for(b = bcache.buf; b < bcache.buf+NBUF; b++){\r\n    b->next = bcache.head.next;\r\n    b->prev = &bcache.head;\r\n    initsleeplock(&b->lock, \"buffer\");\r\n    bcache.head.next->prev = b;\r\n    bcache.head.next = b;\r\n  }\r\n}\r\n\r\n// Look through buffer cache for block on device dev.\r\n// If not found, allocate a buffer.\r\n// In either case, return locked buffer.\r\nstatic struct buf*\r\nbget(uint dev, uint blockno)\r\n{\r\n  struct buf *b;\r\n\r\n  acquire(&bcache.lock);\r\n\r\n  // Is the block already cached?\r\n  for(b = bcache.head.next; b != &bcache.head; b = b->next){\r\n    if(b->dev == dev && b->blockno == blockno){\r\n      b->refcnt++;\r\n      release(&bcache.lock);\r\n      acquiresleep(&b->lock);\r\n      return b;\r\n    }\r\n  }\r\n\r\n  // Not cached.\r\n  // Recycle the least recently used (LRU) unused buffer.\r\n  for(b = bcache.head.prev; b != &bcache.head; b = b->prev){\r\n    if(b->refcnt == 0) {\r\n      b->dev = dev;\r\n      b->blockno = blockno;\r\n      b->valid = 0;\r\n      b->refcnt = 1;\r\n      release(&bcache.lock);\r\n      acquiresleep(&b->lock);\r\n      return b;\r\n    }\r\n  }\r\n  panic(\"bget: no buffers\");\r\n}\r\n\r\n// Return a locked buf with the contents of the indicated block.\r\nstruct buf*\r\nbread(uint dev, uint blockno)\r\n{\r\n  struct buf *b;\r\n\r\n  b = bget(dev, blockno);\r\n  if(!b->valid) {\r\n    virtio_disk_rw(b, 0);\r\n    b->valid = 1;\r\n  }\r\n  return b;\r\n}\r\n\r\n// Write b's contents to disk.  Must be locked.\r\nvoid\r\nbwrite(struct buf *b)\r\n{\r\n  if(!holdingsleep(&b->lock))\r\n    panic(\"bwrite\");\r\n  virtio_disk_rw(b, 1);\r\n}\r\n\r\n// Release a locked buffer.\r\n// Move to the head of the most-recently-used list.\r\nvoid\r\nbrelse(struct buf *b)\r\n{\r\n  if(!holdingsleep(&b->lock))\r\n    panic(\"brelse\");\r\n\r\n  releasesleep(&b->lock);\r\n\r\n  acquire(&bcache.lock);\r\n  b->refcnt--;\r\n  if (b->refcnt == 0) {\r\n    // no one is waiting for it.\r\n    b->next->prev = b->prev;\r\n    b->prev->next = b->next;\r\n    b->next = bcache.head.next;\r\n    b->prev = &bcache.head;\r\n    bcache.head.next->prev = b;\r\n    bcache.head.next = b;\r\n  }\r\n  \r\n  release(&bcache.lock);\r\n}\r\n\r\nvoid\r\nbpin(struct buf *b) {\r\n  acquire(&bcache.lock);\r\n  b->refcnt++;\r\n  release(&bcache.lock);\r\n}\r\n\r\nvoid\r\nbunpin(struct buf *b) {\r\n  acquire(&bcache.lock);\r\n  b->refcnt--;\r\n  release(&bcache.lock);\r\n}\r\n\r\n\r\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/kernel/bio.c b/kernel/bio.c
+--- a/kernel/bio.c	(revision d81ac43e3c51222ec084840ae35c54f1a900de3b)
++++ b/kernel/bio.c	(date 1701011119479)
+@@ -24,130 +24,173 @@
+ #include "buf.h"
+ 
+ struct {
+-  struct spinlock lock;
+-  struct buf buf[NBUF];
++    // struct spinlock lock;
++    struct buf buf[NBUF];
+ 
+-  // Linked list of all buffers, through prev/next.
+-  // Sorted by how recently the buffer was used.
+-  // head.next is most recent, head.prev is least.
+-  struct buf head;
++    // Linked list of all buffers, through prev/next.
++    // Sorted by how recently the buffer was used.
++    // head.next is most recent, head.prev is least.
++    struct buf hash_table_buckets[NBUCKETS];
++    struct spinlock hash_table_bucket_locks[NBUCKETS];
+ } bcache;
+ 
+ void
+-binit(void)
+-{
+-  struct buf *b;
++binit(void) {
++    struct buf *b;
+ 
+-  initlock(&bcache.lock, "bcache");
++    // initlock(&bcache.lock, "bcache");
++    for (int i = 0; i < NBUCKETS; i++) {
++        initlock(&bcache.hash_table_bucket_locks[i], "bcache_bucket_lock");
++        bcache.hash_table_buckets[i].next = &bcache.hash_table_buckets[i];
++        bcache.hash_table_buckets[i].prev = &bcache.hash_table_buckets[i];
++    }
+ 
+-  // Create linked list of buffers
+-  bcache.head.prev = &bcache.head;
+-  bcache.head.next = &bcache.head;
+-  for(b = bcache.buf; b < bcache.buf+NBUF; b++){
+-    b->next = bcache.head.next;
+-    b->prev = &bcache.head;
+-    initsleeplock(&b->lock, "buffer");
+-    bcache.head.next->prev = b;
+-    bcache.head.next = b;
+-  }
++    // Create linked list of buffers
++    for (b = bcache.buf; b < bcache.buf + NBUF; b++) {
++        b->next = bcache.hash_table_buckets[b->blockno % NBUCKETS].next;
++        b->prev = &bcache.hash_table_buckets[b->blockno % NBUCKETS];
++        initsleeplock(&b->lock, "buffer");
++        bcache.hash_table_buckets[b->blockno % NBUCKETS].next->prev = b;
++        bcache.hash_table_buckets[b->blockno % NBUCKETS].next = b;
++    }
+ }
++
++void
++finishResBuffer(struct buf *resBuffer, uint dev, uint blockno, int bucketIndex) {
++    int lruBufferBucketIndex = resBuffer->blockno % NBUCKETS;
++    resBuffer->valid = 0;
++    resBuffer->dev = dev;
++    resBuffer->blockno = blockno;
++    resBuffer->refcnt = 1;
++
++    if (lruBufferBucketIndex != bucketIndex) {
++        resBuffer->next->prev = resBuffer->prev;
++        resBuffer->prev->next = resBuffer->next;
++        resBuffer->next = bcache.hash_table_buckets[bucketIndex].next;
++        resBuffer->prev = &bcache.hash_table_buckets[bucketIndex];
++        bcache.hash_table_buckets[bucketIndex].next->prev = resBuffer;
++        bcache.hash_table_buckets[bucketIndex].next = resBuffer;
++    }
++    release(&bcache.hash_table_bucket_locks[lruBufferBucketIndex]);
++    acquiresleep(&resBuffer->lock);
++}
++
++struct buf *
++getBufferForBlock(uint dev, uint blockno, int bucketIndex) {
++    struct buf *resBuffer = 0;
++    int found = 0;
++    int lastBucketIndex = -1;
++    for (int i = 0; i < NBUCKETS && !found; i++) {
++        acquire(&bcache.hash_table_bucket_locks[i]);
++        if (resBuffer != 0) {
++            lastBucketIndex = resBuffer->blockno % NBUCKETS;
++            if (lastBucketIndex != i) {
++                release(&bcache.hash_table_bucket_locks[lastBucketIndex]);
++            }
++        }
++        struct buf *buffer = bcache.hash_table_buckets[i].next;
++        while (buffer != &bcache.hash_table_buckets[i]) {
++            if (buffer->refcnt == 0) {
++                resBuffer = buffer;
++                found = 1;
++                break;
++            }
++            buffer = buffer->next;
++        }
++
++        if (!found)
++            release(&bcache.hash_table_bucket_locks[i]);
++    }
++    if (lastBucketIndex != -1 && !found)
++        release(&bcache.hash_table_bucket_locks[lastBucketIndex]);
++
++    if (resBuffer == 0) panic("bget: no buffers");
++
++    finishResBuffer(resBuffer, dev, blockno, bucketIndex);
++    return resBuffer;
++}
+ 
+ // Look through buffer cache for block on device dev.
+ // If not found, allocate a buffer.
+ // In either case, return locked buffer.
+-static struct buf*
+-bget(uint dev, uint blockno)
+-{
+-  struct buf *b;
++static struct buf *
++bget(uint dev, uint blockno) {
++    struct buf *b;
+ 
+-  acquire(&bcache.lock);
++    int bucketIndex = blockno % NBUCKETS;
+ 
+-  // Is the block already cached?
+-  for(b = bcache.head.next; b != &bcache.head; b = b->next){
+-    if(b->dev == dev && b->blockno == blockno){
+-      b->refcnt++;
+-      release(&bcache.lock);
+-      acquiresleep(&b->lock);
+-      return b;
+-    }
+-  }
+-
+-  // Not cached.
+-  // Recycle the least recently used (LRU) unused buffer.
+-  for(b = bcache.head.prev; b != &bcache.head; b = b->prev){
+-    if(b->refcnt == 0) {
+-      b->dev = dev;
+-      b->blockno = blockno;
+-      b->valid = 0;
+-      b->refcnt = 1;
+-      release(&bcache.lock);
+-      acquiresleep(&b->lock);
+-      return b;
++//  for (int _ = 0; _ < 5; _++) {
++    acquire(&bcache.hash_table_bucket_locks[bucketIndex]);
++    b = bcache.hash_table_buckets[bucketIndex].next;
++    while (b != &bcache.hash_table_buckets[bucketIndex]) {
++        if (b->dev == dev && b->blockno == blockno) {
++            b->refcnt++;
++            release(&bcache.hash_table_bucket_locks[bucketIndex]);
++            acquiresleep(&b->lock);
++            return b;
++        }
++        b = b->next;
+     }
+-  }
+-  panic("bget: no buffers");
++    release(&bcache.hash_table_bucket_locks[bucketIndex]);
++    // }
++    return getBufferForBlock(dev, blockno, bucketIndex);
+ }
+ 
+ // Return a locked buf with the contents of the indicated block.
+-struct buf*
+-bread(uint dev, uint blockno)
+-{
+-  struct buf *b;
++struct buf *
++bread(uint dev, uint blockno) {
++    struct buf *b;
+ 
+-  b = bget(dev, blockno);
+-  if(!b->valid) {
+-    virtio_disk_rw(b, 0);
+-    b->valid = 1;
+-  }
+-  return b;
++    b = bget(dev, blockno);
++    if (!b->valid) {
++        virtio_disk_rw(b, 0);
++        b->valid = 1;
++    }
++    return b;
+ }
+ 
+ // Write b's contents to disk.  Must be locked.
+ void
+-bwrite(struct buf *b)
+-{
+-  if(!holdingsleep(&b->lock))
+-    panic("bwrite");
+-  virtio_disk_rw(b, 1);
++bwrite(struct buf *b) {
++    if (!holdingsleep(&b->lock))
++        panic("bwrite");
++    virtio_disk_rw(b, 1);
+ }
+ 
+ // Release a locked buffer.
+ // Move to the head of the most-recently-used list.
+ void
+-brelse(struct buf *b)
+-{
+-  if(!holdingsleep(&b->lock))
+-    panic("brelse");
++brelse(struct buf *b) {
++    if (!holdingsleep(&b->lock))
++        panic("brelse");
+ 
+-  releasesleep(&b->lock);
+-
+-  acquire(&bcache.lock);
+-  b->refcnt--;
+-  if (b->refcnt == 0) {
+-    // no one is waiting for it.
+-    b->next->prev = b->prev;
+-    b->prev->next = b->next;
+-    b->next = bcache.head.next;
+-    b->prev = &bcache.head;
+-    bcache.head.next->prev = b;
+-    bcache.head.next = b;
+-  }
+-  
+-  release(&bcache.lock);
++    releasesleep(&b->lock);
++    acquire(&bcache.hash_table_bucket_locks[b->blockno % NBUCKETS]);
++    b->refcnt--;
++    if (b->refcnt == 0) {
++        // no one is waiting for it.
++        b->next->prev = b->prev;
++        b->prev->next = b->next;
++        b->next = bcache.hash_table_buckets[b->blockno % NBUCKETS].next;
++        b->prev = &bcache.hash_table_buckets[b->blockno % NBUCKETS];
++        bcache.hash_table_buckets[b->blockno % NBUCKETS].next->prev = b;
++        bcache.hash_table_buckets[b->blockno % NBUCKETS].next = b;
++    }
++    release(&bcache.hash_table_bucket_locks[b->blockno % NBUCKETS]);
+ }
+ 
+ void
+ bpin(struct buf *b) {
+-  acquire(&bcache.lock);
+-  b->refcnt++;
+-  release(&bcache.lock);
++    acquire(&bcache.hash_table_bucket_locks[b->blockno % NBUCKETS]);
++    b->refcnt++;
++    release(&bcache.hash_table_bucket_locks[b->blockno % NBUCKETS]);
+ }
+ 
+ void
+ bunpin(struct buf *b) {
+-  acquire(&bcache.lock);
+-  b->refcnt--;
+-  release(&bcache.lock);
++    acquire(&bcache.hash_table_bucket_locks[b->blockno % NBUCKETS]);
++    b->refcnt--;
++    release(&bcache.hash_table_bucket_locks[b->blockno % NBUCKETS]);
+ }
+ 
+ 
+Index: kernel/param.h
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>#define NPROC        64  // maximum number of processes\r\n#define NCPU          8  // maximum number of CPUs\r\n#define NOFILE       16  // open files per process\r\n#define NFILE       100  // open files per system\r\n#define NINODE       50  // maximum number of active i-nodes\r\n#define NDEV         10  // maximum major device number\r\n#define ROOTDEV       1  // device number of file system root disk\r\n#define MAXARG       32  // max exec arguments\r\n#define MAXOPBLOCKS  10  // max # of blocks any FS op writes\r\n#define LOGSIZE      (MAXOPBLOCKS*3)  // max data blocks in on-disk log\r\n#define NBUF         (MAXOPBLOCKS*3)  // size of disk block cache\r\n#define FSSIZE       2000  // size of file system in blocks\r\n#define MAXPATH      128   // maximum file path name\r\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/kernel/param.h b/kernel/param.h
+--- a/kernel/param.h	(revision d81ac43e3c51222ec084840ae35c54f1a900de3b)
++++ b/kernel/param.h	(date 1700752595675)
+@@ -11,3 +11,4 @@
+ #define NBUF         (MAXOPBLOCKS*3)  // size of disk block cache
+ #define FSSIZE       2000  // size of file system in blocks
+ #define MAXPATH      128   // maximum file path name
++#define NBUCKETS     13

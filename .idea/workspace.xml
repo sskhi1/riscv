@@ -13,7 +13,7 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="c07b8631-2a0d-4c89-964e-6355d6500f52" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/kernel/e1000.c" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/e1000.c" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/time.txt" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -108,7 +108,7 @@
       <workItem from="1701107835793" duration="3668000" />
       <workItem from="1701193706545" duration="993000" />
       <workItem from="1701281491100" duration="1507000" />
-      <workItem from="1701973340854" duration="5669000" />
+      <workItem from="1701973340854" duration="5792000" />
     </task>
     <servers />
   </component>

@@ -16,6 +16,8 @@
 #include "file.h"
 #include "fcntl.h"
 
+#define threshold 10
+
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
 static int
@@ -256,7 +258,7 @@ create(char *path, short type, short major, short minor)
   if((ip = dirlookup(dp, name, 0)) != 0){
     iunlockput(dp);
     ilock(ip);
-    if(type == T_FILE && (ip->type == T_FILE || ip->type == T_DEVICE))
+    if(type == T_FILE && (ip->type == T_FILE || ip->type == T_DEVICE || ip->type == T_SYMLINK))
       return ip;
     iunlockput(ip);
     return 0;
@@ -328,6 +330,27 @@ sys_open(void)
       return -1;
     }
     ilock(ip);
+    int i = 0;
+    while (!(omode & O_NOFOLLOW) && ip->type == T_SYMLINK) {
+        if (i >= threshold) {
+            iunlockput(ip);
+            end_op();
+            return -1;
+        }
+
+        if (readi(ip, 0, (uint64)path, 0, MAXPATH) == 0) {
+            iunlockput(ip);
+            end_op();
+            return -1;
+        }
+        iunlockput(ip);
+        if((ip = namei(path)) == 0){
+            end_op();
+            return -1;
+        }
+        ilock(ip);
+        i++;
+    }
     if(ip->type == T_DIR && omode != O_RDONLY){
       iunlockput(ip);
       end_op();
@@ -502,4 +525,27 @@ sys_pipe(void)
     return -1;
   }
   return 0;
+}
+
+uint64
+sys_symlink(void)
+{
+    char old[MAXPATH], new[MAXPATH];
+    struct inode *ip;
+
+    if(argstr(0, new, MAXPATH) < 0 || argstr(1, old, MAXPATH) < 0)
+        return -1;
+
+    begin_op();
+    if((ip = create(old, T_SYMLINK, 0, 0)) == 0){
+        end_op();
+        return -1;
+    }
+
+    int len = strlen(new);
+    writei(ip, 0, (uint64)new, 0, len + 1);
+    iupdate(ip);
+    iunlockput(ip);
+    end_op();
+    return 0;
 }

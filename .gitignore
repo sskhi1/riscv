@@ -26,3 +26,5 @@ barrier
 *.dSYM
 *.pcap
 compile_commands.json
+*.tar.gz
+.idea
